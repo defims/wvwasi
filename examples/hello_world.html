@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  script {
+    display: block;
+    white-space: pre-wrap;
+    border: solid 1px gray;
+    background: rgba(0,0,0,.1);
+    font-size: 14px;
+    margin-bottom: 10px;
+    height: 200px;
+    overflow: auto;
+  }
+</style>
+</head>
+<body>
+  <p>Just click the button and you can see the api request and logs in devtools. default rootFd is temp_dir.</p>
+  <button id="raw-test">raw test</button>
+  <script>
+    document.querySelector("#raw-test").addEventListener("click", async () => {
+      try {
+        const origin = 'https://wvwasi.localhost'
+
+        // init
+        const [[initErrorCode, wvwasiIndex, rootFd], sharedBuffer] = await Promise.all([
+          fetch(`${origin}/wasi_snapshot_preview1/init`).then(x => x.json()),
+          new Promise(resolve => {
+            const sharedBufferReceivedHandler = e => {
+              resolve(e.getBuffer())
+              window.chrome.webview.removeEventListener("sharedbufferreceived", sharedBufferReceivedHandler);
+            }
+            window.chrome.webview.addEventListener("sharedbufferreceived", sharedBufferReceivedHandler);
+          })
+        ])
+        console.log(initErrorCode, wvwasiIndex, rootFd, sharedBuffer)
+
+        // fd_readdir
+        const [fdReaddirErrorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_readdir`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              rootFd,
+              0x4, // buf_ptr
+              sharedBuffer.byteLength,
+              0, // cookie
+              0x0, // bufused_ptr
+            ])
+          }
+        ).then(x => x.json())
+        const bufused = new Int32Array(sharedBuffer.slice(0, 4))[0];
+        console.log(fdReaddirErrorCode, bufused)
+
+        // path_remove_directory
+        console.log(await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_remove_directory`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              rootFd,
+              "test",
+            ])
+          }
+        ).then(x => x.json()))
+
+        // path_unlink_file
+        console.log(await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_unlink_file`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              rootFd,
+              "test.txt",
+            ])
+          }
+        ).then(x => x.json()))
+      } catch(e) {
+        console.error(e)
+      }
+    })
+  </script>
+
+  <button id="wvwasi-test">WvWasi test</button>
+  <script>
+    document.querySelector("#wvwasi-test").addEventListener("click", async () => {
+      try {
+        const wvwasi = new window.WvWasi()
+        console.log(wvwasi)
+
+        console.log(await wvwasi.wasiSnapshotPreview1.init())
+
+        const rootFd = wvwasi.wasiSnapshotPreview1.rootFd
+        const sharedBuffer = wvwasi.wasiSnapshotPreview1.sharedBuffer
+
+        console.log(await preview1.fd_readdir(
+          rootFd,
+          0x4,
+          sharedBuffer.byteLength,
+          0,
+          0x0
+        ))
+
+        console.log(await preview1.path_remove_directory(
+          rootFd,
+          "test",
+        ))
+
+        console.log(await wvwasi.path_unlink_file(
+          rootFd,
+          "test",
+        ))
+      } catch(e) {
+        console.error(e)
+      }
+    })
+  </script>
+</body>
+</html>
