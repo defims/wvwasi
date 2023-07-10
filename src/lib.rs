@@ -5,7 +5,7 @@
 //!
 //! [wry]: https://crates.io/crates/wry
 
-pub use wry::*;
+pub use wvwasi_wry::*;
 
 pub mod webview;
 pub mod wasi;

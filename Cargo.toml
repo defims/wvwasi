@@ -21,7 +21,7 @@ wasi-cap-std-sync = "10.0.1"
 wasi-common = "10.0.1"
 webview2-com = "0.25.0"
 wiggle = "10.0.1"
-wry = { version = "0.29.0", path = "./wry" }
+wvwasi-wry = "0.29.0-wvwasi-0.1.2"
 
 [dependencies.windows]
 version = "0.48.0"
