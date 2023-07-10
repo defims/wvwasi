@@ -1,18 +1,20 @@
-pub use wry::webview::*;
-use wry::{
+pub use wvwasi_wry::webview::*;
+use wvwasi_wry::{
+  webview,
   application::window::Window,
   Result,
-  http::{Request, Response, header}
+  http,
+  Error
 };
 
 use crate::wasi::Wasi;
 
 fn handle_wvwasi_protocol(
   wasis: &mut Vec<Wasi>,
-  request: &Request<Vec<u8>>,
+  request: &http::Request<Vec<u8>>,
   webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
   env: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment
-) -> std::result::Result<Response<std::borrow::Cow<'static, [u8]>>, wry::Error> {
+) -> std::result::Result<http::Response<std::borrow::Cow<'static, [u8]>>, Error> {
   use wasi_common::snapshots::preview_1::error::Errno;
 
   let request_path = request.uri().path();
@@ -88,16 +90,16 @@ fn handle_wvwasi_protocol(
     }
   };
 
-  Response::builder()
-  .header(header::CONTENT_TYPE, "application/json")
-  .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+  http::Response::builder()
+  .header(http::header::CONTENT_TYPE, "application/json")
+  .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
   .body(std::borrow::Cow::from(response_body))
   .map_err(Into::into)
 }
 
 
 pub struct WebViewBuilder<'a> {
-  inner_web_view_builder: wry::webview::WebViewBuilder<'a>,
+  inner_web_view_builder: webview::WebViewBuilder<'a>,
   wasis: Vec<Wasi>
 }
 
@@ -105,7 +107,7 @@ impl<'a> WebViewBuilder<'a> {
   /// Create [`WebViewBuilder`] from provided [`Window`].
   pub fn new(window: Window) -> Result<Self> {
     Ok(Self {
-      inner_web_view_builder: wry::webview::WebViewBuilder::new(window)?,
+      inner_web_view_builder: webview::WebViewBuilder::new(window)?,
       wasis: vec![]
     })
   }
@@ -194,7 +196,7 @@ impl<'a> WebViewBuilder<'a> {
   // #[cfg(feature = "protocol")]
   pub fn with_custom_protocol<F>(mut self, name: String, mut handler: F) -> Self
   where
-    F: FnMut(&Request<Vec<u8>>) -> Result<Response<std::borrow::Cow<'static, [u8]>>> + 'static,
+    F: FnMut(&http::Request<Vec<u8>>) -> Result<http::Response<std::borrow::Cow<'static, [u8]>>> + 'static,
   {
     self.inner_web_view_builder = self.inner_web_view_builder.with_custom_protocol(name, move |request, _webview, _env| {
       handler(request)
@@ -230,7 +232,7 @@ impl<'a> WebViewBuilder<'a> {
 
   /// Load the provided URL with given headers when the builder calling [`WebViewBuilder::build`] to create the
   /// [`WebView`]. The provided URL must be valid.
-  pub fn with_url_and_headers(mut self, url: &str, headers: wry::http::HeaderMap) -> Result<Self> {
+  pub fn with_url_and_headers(mut self, url: &str, headers: http::HeaderMap) -> Result<Self> {
     self.inner_web_view_builder = self.inner_web_view_builder.with_url_and_headers(url, headers).unwrap();
     Ok(self)
   }
@@ -417,7 +419,7 @@ impl<'a> WebViewBuilder<'a> {
 }
 
 #[cfg(windows)]
-impl wry::webview::WebViewBuilderExtWindows for WebViewBuilder<'_> {
+impl webview::WebViewBuilderExtWindows for WebViewBuilder<'_> {
   fn with_additional_browser_args<S: Into<String>>(mut self, additional_args: S) -> Self {
     self.inner_web_view_builder = self.inner_web_view_builder.with_additional_browser_args(additional_args);
     self
@@ -435,10 +437,10 @@ impl wry::webview::WebViewBuilderExtWindows for WebViewBuilder<'_> {
 }
 
 #[cfg(target_os = "android")]
-impl wry::webview::WebViewBuilderExtAndroid for WebViewBuilder<'_> {
+impl webview::WebViewBuilderExtAndroid for WebViewBuilder<'_> {
   fn on_webview_created<
     F: Fn(
-        wry::webview::prelude::Context<'_>,
+        webview::prelude::Context<'_>,
       ) -> std::result::Result<(), tao::platform::android::ndk_glue::jni::errors::Error>
       + Send
       + 'static,
