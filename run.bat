@@ -1,0 +1,1 @@
+cargo run --example hello_world --target x86_64-pc-windows-msvc

@@ -1,0 +1,3 @@
+[submodule "wry"]
+	path = wry
+	url = git@github.com:defims/wry.git
