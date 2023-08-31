@@ -81,8 +81,15 @@ fn handle_wvwasi_protocol<'a>(
           "/fd_sync" => { wasi.fd_sync(request_body) },
           "/fd_tell" => { wasi.fd_tell(request_body) },
           "/fd_write" => { wasi.fd_write(request_body) },
+          "/path_create_directory" => { wasi.path_create_directory(request_body) },
+          "/path_filestat_get" => { wasi.path_filestat_get(request_body) },
+          "/path_filestat_set_times" => { wasi.path_filestat_set_times(request_body) },
+          "/path_link" => { wasi.path_link(request_body) },
           "/path_open" => { wasi.path_open(request_body) },
+          "/path_readlink" => { wasi.path_readlink(request_body) },
           "/path_remove_directory" => { wasi.path_remove_directory(request_body) },
+          "/path_rename" => { wasi.path_rename(request_body) },
+          "/path_symlink" => { wasi.path_symlink(request_body) },
           "/path_unlink_file" => { wasi.path_unlink_file(request_body) },
           _ => { 
             Ok("".as_bytes().to_owned())

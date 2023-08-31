@@ -19,29 +19,60 @@
   <button id="raw-test">raw test</button>
   <script>
     document.querySelector("#raw-test").addEventListener("click", async () => {
-      try {
-        const origin = 'https://wvwasi.localhost'
-        let sharedBufferEnd = 0, testFd
+      const origin = 'https://wvwasi.localhost'
+      const fs_rights_base =
+          1 << 0 | // fd_datasync |
+          1 << 1 | // fd_read |
+          1 << 2 | // fd_seek |
+          1 << 3 | // fd_fdstat_set_flags |
+          1 << 4 | // fd_sync |
+          1 << 5 | // fd_tell |
+          1 << 6 | // fd_write |
+          1 << 7 | // fd_advise |
+          1 << 8 | // fd_allocate |
+          1 << 9 | // path_create_directory |
+          1 << 10 | // path_create_file |
+          1 << 11 | // path_link_source
+          1 << 12 | // path_link_target
+          1 << 13 | // path_open
+          1 << 14 | // fd_readdir
+          1 << 15 | // path_readlink
+          1 << 16 | // path_rename_source
+          1 << 17 | // path_rename_target
+          1 << 18 | // path_filestat_get
+          1 << 19 | // path_filestat_set_size
+          1 << 20 | // path_filestat_set_times
+          1 << 21 | // fd_filestat_get
+          1 << 22 | // fd_filestat_set_size
+          1 << 23 | // fd_filestat_set_times
+          1 << 24 | // path_symlink
+          1 << 25 | // path_remove_directory
+          1 << 26 | // path_unlink_file
+          1 << 27 | // poll_fd_readwrite
+          1 << 28 | // sock_shutdown
+          1 << 29 // sock_accept TODO use bigInt
+      let sharedBuffer, sharedBufferEnd = 0, rootFd, testTxtFd, testFd
 
-        // align offset
-        function align(offset, align) {
-          const remainder = offset % align
-          return remainder > 0 ? offset + align - remainder : offset;
+      // align offset
+      function align(offset, align) {
+        const remainder = offset % align
+        return remainder > 0 ? offset + align - remainder : offset;
+      }
+
+      function writeStringIntoSharedBuffer(string, sharedBuffer, pathPtr) {
+        const path = new TextEncoder().encode(string)
+        const pathLen = path.length
+        const pathArray = new Uint8Array(sharedBuffer, pathPtr, pathLen*8)
+        for(let i = 0; i < pathLen; i++) {
+          pathArray[i] = path[i]
         }
+        return [pathPtr, pathLen]
+      }
 
-        function writeStringIntoSharedBuffer(string, sharedBuffer, pathPtr) {
-          const path = new TextEncoder().encode(string)
-          const pathLen = path.length
-          const pathArray = new Uint8Array(sharedBuffer, pathPtr, pathLen*8)
-          for(let i = 0; i < pathLen; i++) {
-            pathArray[i] = path[i]
-          }
-          return [pathPtr, pathLen]
-        }
-
-        // init
-        // sharedBuffer: [] grammar: [[ptr, len], ...]
-        const [[initErrorCode, wvwasiIndex, rootFd], sharedBuffer] = await Promise.all([
+      // init
+      // sharedBuffer: [] grammar: [[ptr, len], ...]
+      try{
+        const [[errorCode, index, fd], buffer] = await Promise.all([
           fetch(`${origin}/wasi_snapshot_preview1/init`).then(x => x.json()),
           new Promise(resolve => {
             const sharedBufferReceivedHandler = e => {
@@ -51,565 +82,861 @@
             window.chrome.webview.addEventListener("sharedbufferreceived", sharedBufferReceivedHandler);
           })
         ])
-        console.log('init:', initErrorCode, wvwasiIndex, rootFd, sharedBuffer)
+        wvwasiIndex = index
+        rootFd = fd
+        sharedBuffer = buffer 
+        console.log('init:', errorCode, wvwasiIndex, rootFd, sharedBuffer)
+      } catch(e) { console.error(e) }
 
-
-        // fd_prestat_get
-        // sharedBuffer: [
-        //   [bufPtr, 8],
-        // ]
-        {
-          const fd = rootFd
-          const bufPtr = align(sharedBufferEnd, 8)
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_prestat_get`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, bufPtr])
-            }
-          ).then(x => x.json())
-          const prestat = new BigUint64Array(sharedBuffer, bufPtr, 1)[0];
-          console.log("fd_prestat_get:", {errorCode, fd, prestat})
-          sharedBufferEnd = bufPtr + 8
-        }
-
-        // fd_prestat_dir_name
-        // sharedBuffer: [
-        //   ...
-        //   [path, pathLen],
-        // ]
-        {
-          const fd = rootFd
-          const path = align(sharedBufferEnd, 4)
-          const pathLen = 64
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_prestat_dir_name`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, path, pathLen])
-            }
-          ).then(x => x.json())
-          const dirName = new TextDecoder().decode(new Uint8Array(sharedBuffer, path, pathLen))
-          console.log("fd_prestat_dir_name:", {errorCode, fd, path, pathLen, dirName})
-          sharedBufferEnd = path + pathLen
-        }
-
-        // fd_fdstat_get
-        // sharedBuffer: [
-        //   ...
-        //   [fdstatPtr, fdstatLen],
-        // ]
-        {
-          const fd = rootFd
-          const fdstatPtr = align(sharedBufferEnd, 8)
-          const fdstatLen = 24
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_fdstat_get`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, fdstatPtr])
-            }
-          ).then(x => x.json())
-          const fdstat = new BigUint64Array(sharedBuffer, fdstatPtr, fdstatLen/8);
-          const filetype = new Uint8Array(sharedBuffer, fdstatPtr, 1)[0]
-          const flags = new Uint8Array(sharedBuffer, fdstatPtr + 2, 1)[0]
-          console.log("fd_fdstat_get:", {errorCode, fd, fdstatPtr, fdstatLen, fdstat, filetype, flags})
-          sharedBufferEnd = fdstatPtr + fdstatLen
-        }
-
-        // fd_readdir
-        // sharedBuffer: [
-        //   ...
-        //   [bufusedPtr, 4],
-        //   [bufPtr, bufused],
-        // ]
-        {
-          const fd = rootFd
-          const bufusedPtr = align(sharedBufferEnd, 4)
-          const bufPtr = align(bufusedPtr + 4, 4)
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_readdir`,
-            {
-              method: 'POST',
-              body: JSON.stringify([
-                fd,
-                bufPtr,
-                sharedBuffer.byteLength,
-                0, // cookie
-                bufusedPtr,
-              ])
-            }
-          ).then(x => x.json())
-          const bufused = new Int32Array(sharedBuffer, bufusedPtr, 1)[0];
-          console.log('fd_readdir:', {errorCode, fd, bufusedPtr, bufPtr, bufused})
-          sharedBufferEnd = bufPtr + bufused
-        }
-
-        // path_open
-        // sharedBuffer: [
-        //   ...
-        //   [pathPtr, pathLen],
-        //   [fdPtr, 4],
-        // ]
-        {
-          const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
-            "test.txt",
-            sharedBuffer,
-            align(sharedBufferEnd, 4)
-          )
-          const fdPtr = align(pathPtr + pathLen, 4) // align to 4
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_open`,
-            {
-              method: 'POST',
-              body: JSON.stringify([
-                rootFd, // dirfd,
-                1 << 0, // dirflags Lookupflags::SYMLINK_FOLLOW ,
-                pathPtr,
-                pathLen,
-                1 << 0, // o_flags Oflags::CREAT,
-                1 << 0 | // Rights::FD_DATASYNC |
-                1 << 21 | // Rights::FD_FILESTAT_GET |
-                1 << 22 | // Rights::FD_FILESTAT_SET_SIZE |
-                1 << 1 | // Rights::FD_READ |
-                1 << 2 | // Rights::FD_SEEK |
-                1 << 4 | // Rights::FD_SYNC |
-                1 << 5 | // Rights::FD_TELL |
-                1 << 6 | // Rights::FD_WRITE |
-                1 << 26, // Rights::PATH_UNLINK_FILE, // fs_rights_base TODO use bigInt
-                0, // fs_rights_inheriting,
-                0, // fs_flags,
-                fdPtr
-              ])
-            }
-          ).then(x => x.json())
-          const fd = new Uint32Array(sharedBuffer, fdPtr, 4)[0]
-          console.log('path_open:', {errorCode, fd})
-          sharedBufferEnd = fdPtr + 4
-          testFd = fd
-        }
-
-        // fd_advise
-        {
-          const fd = testFd
-          const offset = 0
-          const len = 64
-          const advice = 0 // normal
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_advise`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, offset, len, advice])
-            }
-          ).then(x => x.json())
-          console.log("fd_advise:", {errorCode, fd, offset, len, advice})
-        }
-
-        // fd_allocate
-        {
-          const fd = testFd
-          const offset = 0
-          const len = 64
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_allocate`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, offset, len])
-            }
-          ).then(x => x.json())
-          console.log("fd_allocate:", {errorCode, fd, offset, len})
-        }
-
-        // fd_fdstat_set_flags
-        {
-          const fd = testFd
-          const flags =
-            1 << 0 | // append |
-            1 << 2 // nonblock
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_fdstat_set_flags`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, flags])
-            }
-          ).then(x => x.json())
-          console.log("fd_fdstat_set_flags:", {errorCode, fd, flags})
-        }
-
-        // fd_fdstat_set_rights
-        {
-          const fd = testFd
-          const fs_rights_base =
-            1 << 0 | // fd_datasync |
-            1 << 1 | // fd_read |
-            1 << 2 | // fd_seek |
-            1 << 3 | // fd_fdstat_set_flags |
-            1 << 4 | // fd_sync |
-            1 << 5 | // fd_tell |
-            1 << 6 | // fd_write |
-            1 << 7 | // fd_advise |
-            1 << 8 | // fd_allocate |
-            1 << 9 | // path_create_directory |
-            1 << 10 | // path_create_file |
-            1 << 11 | // path_link_source
-            1 << 22 // fd_filestat_set_size
-          const fs_rights_inheriting = fs_rights_base 
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_fdstat_set_rights`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, fs_rights_base, fs_rights_inheriting])
-            }
-          ).then(x => x.json())
-          console.log("fd_fdstat_set_rights:", {errorCode, fd, fs_rights_base, fs_rights_inheriting})
-        }
-
-        // fd_filestat_set_size
-        {
-          const fd = testFd
-          const size = 64
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_filestat_set_size`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, size])
-            }
-          ).then(x => x.json())
-          console.log("fd_filestat_set_size:", {errorCode, fd, size })
-        }
-
-        // fd_filestat_set_times
-        {
-          const fd = testFd
-          const atim = new Date().getTime()
-          const mtim = new Date().getTime()
-          const fst_flags = 
-            1 << 0 | // atim
-            1 << 2 // mtim
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_filestat_set_times`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, atim, mtim, fst_flags])
-            }
-          ).then(x => x.json())
-          console.log("fd_filestat_set_times:", {errorCode, fd, atim, mtim, fst_flags})
-        }
-
-        // fd_filestat_get
-        // sharedBuffer: [
-        //   ...
-        //   [filestatPtr, filestatLen],
-        {
-          const fd = testFd
-          const filestatPtr = align(sharedBufferEnd, 8)
-          const filestatLen = 64
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_filestat_get`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, filestatPtr])
-            }
-          ).then(x => x.json())
-          const filestat = new BigUint64Array(sharedBuffer, filestatPtr, filestatLen/8);
-          const filetype = new Uint8Array(sharedBuffer, filestatPtr + 2*8, 1)[0]
-          console.log("fd_filestat_get:", {errorCode, fd, filestatPtr, filestatLen, filestat, filetype})
-          sharedBufferEnd = filestatPtr + filestatLen
-        }
-
-        // fd_write
-        // sharedBuffer: [
-        //   ...
-        //   [iovsPtr, iovsLen*8],
-        //   [nwittenPtr, 4],
-        //   [iovsBufPtr, written.length],
-        // ]
-        {
-          // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec_array-listiovec Size: 8 Alignment: 4
-          const iovsPtr = align(sharedBufferEnd, 4) // align to 4
-          const iovsLen = 1
-          const writtenText = "I'm wvwasi written!"
-          const written = new TextEncoder().encode(writtenText)
-          const nwrittenPtr = align(iovsPtr + iovsLen*8, 4)
-          const iovsBufPtr = nwrittenPtr + 4
-          const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
-          iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
-          iovs.setInt32(4, written.length, true) // iovs.buf_len
-          const pathArray = new Uint8Array(sharedBuffer, iovsBufPtr, written.length)
-          for(let i = 0, l = written.length; i < l; i++) {
-            pathArray[i] = written[i]
+      // fd_prestat_get
+      // sharedBuffer: [
+      //   [bufPtr, 8],
+      // ]
+      try {
+        const fd = rootFd
+        const bufPtr = align(sharedBufferEnd, 8)
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_prestat_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, bufPtr])
           }
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_write`,
-            {
-              method: 'POST',
-              body: JSON.stringify([testFd, iovsPtr, iovsLen, nwrittenPtr])
-            }
-          ).then(x => x.json())
-          const nwritten = new Int32Array(sharedBuffer, nwrittenPtr, 1)[0];
-          console.log("fd_write:", {errorCode, nwritten, writtenText, written})
-          sharedBufferEnd = iovsBufPtr + written.length
-        }
+        ).then(x => x.json())
+        const prestat = new BigUint64Array(sharedBuffer, bufPtr, 1)[0];
+        console.log("fd_prestat_get:", {errorCode, fd, prestat})
+        sharedBufferEnd = bufPtr + 8
+      } catch(e) { console.error(e) }
 
-        // fd_renumber
-        {
-          const fd = testFd
-          const to = 5
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_renumber`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, to])
-            }
-          ).then(x => x.json())
-          console.log("fd_renumber:", {errorCode, fd, to})
-          testFd = to
-        }
-
-        // fd_datasync
-        {
-          const fd = testFd
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_datasync`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd])
-            }
-          ).then(x => x.json())
-          console.log("fd_datasync:", {errorCode, fd})
-        }
-
-        // fd_sync
-        {
-          const fd = testFd
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_sync`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd])
-            }
-          ).then(x => x.json())
-          console.log("fd_sync:", {errorCode, fd})
-        }
-
-        // fd_tell
-        // sharedBuffer: [
-        //   ...
-        //   [offsetPtr, 8],
-        // ]
-        {
-          const fd = testFd
-          const offsetPtr = align(sharedBufferEnd, 8)
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_tell`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd, offsetPtr])
-            }
-          ).then(x => x.json())
-          const offset = new BigUint64Array(sharedBuffer, offsetPtr, 1)[0];
-          console.log("fd_tell:", {errorCode, fd, offset})
-          sharedBufferEnd = offsetPtr + 8
-        }
-
-        // fd_pwrite
-        // sharedBuffer: [
-        //   ...
-        //   [iovsPtr, iovsLen*8],
-        //   [nwittenPtr, 4],
-        //   [iovsBufPtr, written.length],
-        // ]
-        {
-          const iovsPtr = align(sharedBufferEnd, 4) // align to 4
-          const iovsLen = 1
-          const writtenText = " And this is from fd_pwrite."
-          const written = new TextEncoder().encode(writtenText)
-          const nwrittenPtr = align(iovsPtr + iovsLen*8, 4)
-          const iovsBufPtr = nwrittenPtr + 4
-          const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
-          iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
-          iovs.setInt32(4, written.length, true) // iovs.buf_len
-          const pathArray = new Uint8Array(sharedBuffer, iovsBufPtr, written.length)
-          for(let i = 0, l = written.length; i < l; i++) {
-            pathArray[i] = written[i]
+      // fd_prestat_dir_name
+      // sharedBuffer: [
+      //   ...
+      //   [path, pathLen],
+      // ]
+      try {
+        const fd = rootFd
+        const path = align(sharedBufferEnd, 4)
+        const pathLen = 64
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_prestat_dir_name`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, path, pathLen])
           }
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_pwrite`,
-            {
-              method: 'POST',
-              body: JSON.stringify([
-                testFd,
-                iovsPtr,
-                iovsLen,
-                19, // offset
-                nwrittenPtr
-              ])
-            }
-          ).then(x => x.json())
-          const nwritten = new Int32Array(sharedBuffer, nwrittenPtr, 1)[0];
-          console.log("fd_pwrite:", {errorCode, nwritten, writtenText, written})
-          sharedBufferEnd = iovsBufPtr + written.length
-        }
+        ).then(x => x.json())
+        const dirName = new TextDecoder().decode(new Uint8Array(sharedBuffer, path, pathLen))
+        console.log("fd_prestat_dir_name:", {errorCode, fd, path, pathLen, dirName})
+        sharedBufferEnd = path + pathLen
+      } catch(e) { console.error(e) }
 
-        // fd_pread
-        // sharedBuffer: [
-        //   ...
-        //   [iovsPtr, iovsLen*8],
-        //   [nreadPtr, 4],
-        //   [iovsBufPtr, 128],
-        // ]
-        {
-          // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec_array-listiovec Size: 8 Alignment: 4
-          const iovsPtr = align(sharedBufferEnd, 4) // align to 4 https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec-record
-          const iovsLen = 1
-          const nreadPtr = align(iovsPtr + iovsLen*8, 4)
-          const iovsBufPtr = nreadPtr + 4
-          const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
-          iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
-          iovs.setInt32(4, 128, true) // iovs.buf_len
-          const offset = 4
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_pread`,
-            {
-              method: 'POST',
-              body: JSON.stringify([
-                testFd,
-                iovsPtr,
-                iovsLen,
-                offset,
-                nreadPtr
-              ])
-            }
-          ).then(x => x.json())
-          const nread = new Int32Array(sharedBuffer, nreadPtr, 1)[0]
-          const read = new TextDecoder().decode(new Uint8Array(sharedBuffer, iovsBufPtr, nread))
-          console.log("fd_pread:", {errorCode, offset, nread, read})
-          sharedBufferEnd = iovsBufPtr + 128
-        }
+      // fd_fdstat_get
+      // sharedBuffer: [
+      //   ...
+      //   [fdstatPtr, fdstatLen],
+      // ]
+      try {
+        const fd = rootFd
+        const fdstatPtr = align(sharedBufferEnd, 8)
+        const fdstatLen = 24
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_fdstat_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, fdstatPtr])
+          }
+        ).then(x => x.json())
+        const fdstat = new BigUint64Array(sharedBuffer, fdstatPtr, fdstatLen/8);
+        const filetype = new Uint8Array(sharedBuffer, fdstatPtr, 1)[0]
+        const flags = new Uint8Array(sharedBuffer, fdstatPtr + 2, 1)[0]
+        console.log("fd_fdstat_get:", {errorCode, fd, fdstatPtr, fdstatLen, fdstat, filetype, flags})
+        sharedBufferEnd = fdstatPtr + fdstatLen
+      } catch(e) { console.error(e) }
 
-        // fd_seek
-        // sharedBuffer: [
-        //   ...
-        //   [newoffsetPtr, 8]
-        // ]
-        {
-          const newoffsetPtr = align(sharedBufferEnd, 8) // align to 8 https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-filesize-u64
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_seek`,
-            {
-              method: 'POST',
-              body: JSON.stringify([
-                testFd,
-                0, // offset
-                0, // whence set, Seek relative to start-of-file.
-                newoffsetPtr
-              ])
-            }
-          ).then(x => x.json())
-          const newoffset = new BigUint64Array(sharedBuffer, newoffsetPtr, 1)[0];
-          console.log("fd_seek:", {errorCode, newoffset})
-          sharedBufferEnd = newoffsetPtr + 8
-        }
+      // path_open
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      //   [fdPtr, 4],
+      // ]
+      try {
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const fdPtr = align(pathPtr + pathLen, 4) // align to 4
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_open`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              rootFd, // dirfd,
+              1 << 0, // dirflags Lookupflags::SYMLINK_FOLLOW ,
+              pathPtr,
+              pathLen,
+              1 << 0, // o_flags Oflags::CREAT,
+              fs_rights_base,
+              0, // fs_rights_inheriting,
+              0, // fdflags,
+              fdPtr
+            ])
+          }
+        ).then(x => x.json())
+        const fd = new Uint32Array(sharedBuffer, fdPtr, 4)[0]
+        console.log('path_open:', {errorCode, fd, fs_rights_base})
+        sharedBufferEnd = fdPtr + 4
+        testTxtFd = fd
+      } catch(e) { console.error(e) }
 
-        // fd_read
-        // sharedBuffer: [
-        //   ...
-        //   [iovsPtr, iovsLen*8],
-        //   [nreadPtr, 4],
-        //   [iovsBufPtr, 128],
-        // ]
-        {
-          // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec_array-listiovec Size: 8 Alignment: 4
-          const iovsPtr = align(sharedBufferEnd, 4) // align to 4
-          const iovsLen = 1
-          const nreadPtr = align(iovsPtr + iovsLen*8, 4)
-          const iovsBufPtr = nreadPtr + 4
-          const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
-          iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
-          iovs.setInt32(4, 128, true) // iovs.buf_len
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_read`,
-            {
-              method: 'POST',
-              body: JSON.stringify([testFd, iovsPtr, iovsLen, nreadPtr])
-            }
-          ).then(x => x.json())
-          const nread = new Int32Array(sharedBuffer, nreadPtr, 1)[0];
-          const read = new TextDecoder().decode(new Uint8Array(sharedBuffer, iovsBufPtr, nread))
-          console.log("fd_read:", {errorCode, nread, read})
-          sharedBufferEnd = iovsBufPtr + 128
-        }
+      // fd_advise
+      try {
+        const fd = testTxtFd
+        const offset = 0
+        const len = 64
+        const advice = 0 // normal
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_advise`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, offset, len, advice])
+          }
+        ).then(x => x.json())
+        console.log("fd_advise:", {errorCode, fd, offset, len, advice})
+      } catch(e) { console.error(e) }
 
-        // path_remove_directory
-        // sharedBuffer: [
-        //   ...
-        //   [pathPtr, pathLen],
-        // ]
-        {
-          const fd = rootFd
-          const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
-            "test",
-            sharedBuffer,
-            align(sharedBufferEnd, 4)
-          )
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_remove_directory`,
-            {
-              method: 'POST',
-              body: JSON.stringify([
-                fd,
-                pathPtr,
-                pathLen,
-              ])
-            }
-          ).then(x => x.json())
-          console.log("path_remove_directory:", {errorCode, pathPtr, pathLen})
-          sharedBufferEnd = pathPtr + pathLen
-        }
+      // fd_allocate
+      try {
+        const fd = testTxtFd
+        const offset = 0
+        const len = 64
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_allocate`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, offset, len])
+          }
+        ).then(x => x.json())
+        console.log("fd_allocate:", {errorCode, fd, offset, len})
+      } catch(e) { console.error(e) }
 
-        // path_unlink_file
-        // sharedBuffer: [
-        //   ...
-        //   [pathPtr, pathLen],
-        // ]
-        {
-          const fd = rootFd
-          const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
-            "test.txt",
-            sharedBuffer,
-            align(sharedBufferEnd, 4)
-          )
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_unlink_file`,
-            {
-              method: 'POST',
-              body: JSON.stringify([
-                fd,
-                pathPtr,
-                pathLen
-              ])
-            }
-          ).then(x => x.json())
-          console.log("path_unlink_file:", {errorCode, fd, pathPtr, pathLen})
-          sharedBufferEnd = pathPtr + pathLen
-        }
+      // fd_filestat_set_size
+      try {
+        const fd = testTxtFd
+        const size = 64
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_filestat_set_size`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, size])
+          }
+        ).then(x => x.json())
+        console.log("fd_filestat_set_size:", {errorCode, fd, size})
+      } catch(e) { console.error(e) }
 
-        // fd_close
-        {
-          const fd = testFd
-          const [errorCode] = await fetch(
-            `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_close`,
-            {
-              method: 'POST',
-              body: JSON.stringify([fd])
-            }
-          ).then(x => x.json())
-          console.log("fd_close:", {errorCode, fd})
-        }
+      // fd_filestat_set_times
+      try {
+        const fd = testTxtFd
+        const atim = new Date().getTime()
+        const mtim = new Date().getTime()
+        const fst_flags = 
+          1 << 0 | // atim
+          1 << 2 // mtim
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_filestat_set_times`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, atim, mtim, fst_flags])
+          }
+        ).then(x => x.json())
+        console.log("fd_filestat_set_times:", {errorCode, fd, atim, mtim, fst_flags})
+      } catch(e) { console.error(e) }
 
-      } catch(e) {
-        console.error(e)
-      }
+      // fd_fdstat_set_flags
+      try {
+        const fd = testTxtFd
+        const flags = 1 << 0 // append
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_fdstat_set_flags`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, flags])
+          }
+        ).then(x => x.json())
+        console.log("fd_fdstat_set_flags:", {errorCode, fd, flags})
+      } catch(e) { console.error(e) }
+
+      // fd_fdstat_set_rights
+      try {
+        const fd = testTxtFd
+        const fs_rights_inheriting = fs_rights_base 
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_fdstat_set_rights`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, fs_rights_base, fs_rights_inheriting])
+          }
+        ).then(x => x.json())
+        console.log("fd_fdstat_set_rights:", {errorCode, fd, fs_rights_base, fs_rights_inheriting})
+      } catch(e) { console.error(e) }
+
+      // fd_filestat_get
+      // sharedBuffer: [
+      //   ...
+      //   [filestatPtr, filestatLen],
+      try {
+        const fd = testTxtFd
+        const filestatPtr = align(sharedBufferEnd, 8)
+        const filestatLen = 64
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_filestat_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, filestatPtr])
+          }
+        ).then(x => x.json())
+        const filestat = new BigUint64Array(sharedBuffer, filestatPtr, filestatLen/8);
+        const filetype = new Uint8Array(sharedBuffer, filestatPtr + 2*8, 1)[0]
+        console.log("fd_filestat_get:", {errorCode, fd, filestatPtr, filestatLen, filestat, filetype})
+        sharedBufferEnd = filestatPtr + filestatLen
+      } catch(e) { console.error(e) }
+
+      // fd_fdstat_get
+      // sharedBuffer: [
+      //   ...
+      //   [fdstatPtr, fdstatLen],
+      // ]
+      try {
+        const fd = testTxtFd
+        const fdstatPtr = align(sharedBufferEnd, 8)
+        const fdstatLen = 24
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_fdstat_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, fdstatPtr])
+          }
+        ).then(x => x.json())
+        const fdstat = new BigUint64Array(sharedBuffer, fdstatPtr, fdstatLen/8);
+        const filetype = new Uint8Array(sharedBuffer, fdstatPtr, 1)[0]
+        const flags = new Uint8Array(sharedBuffer, fdstatPtr + 2, 1)[0]
+        console.log("fd_fdstat_get:", {errorCode, fd, fdstatPtr, fdstatLen, fdstat, filetype, flags})
+        sharedBufferEnd = fdstatPtr + fdstatLen
+      } catch(e) { console.error(e) }
+
+      // fd_write
+      // sharedBuffer: [
+      //   ...
+      //   [iovsPtr, iovsLen*8],
+      //   [nwittenPtr, 4],
+      //   [iovsBufPtr, written.length],
+      // ]
+      try {
+        // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec_array-listiovec Size: 8 Alignment: 4
+        const iovsPtr = align(sharedBufferEnd, 4) // align to 4
+        const iovsLen = 1
+        const writtenText = "I'm wvwasi written!"
+        const written = new TextEncoder().encode(writtenText)
+        const nwrittenPtr = align(iovsPtr + iovsLen*8, 4)
+        const iovsBufPtr = nwrittenPtr + 4
+        const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
+        iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
+        iovs.setInt32(4, written.length, true) // iovs.buf_len
+        const pathArray = new Uint8Array(sharedBuffer, iovsBufPtr, written.length)
+        for(let i = 0, l = written.length; i < l; i++) {
+          pathArray[i] = written[i]
+        }
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_write`,
+          {
+            method: 'POST',
+            body: JSON.stringify([testTxtFd, iovsPtr, iovsLen, nwrittenPtr])
+          }
+        ).then(x => x.json())
+        const nwritten = new Int32Array(sharedBuffer, nwrittenPtr, 1)[0];
+        console.log("fd_write:", {errorCode, nwritten, writtenText, written})
+        sharedBufferEnd = iovsBufPtr + written.length
+      } catch(e) { console.error(e) }
+
+      // fd_renumber
+      try {
+        const fd = testTxtFd
+        const to = 5
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_renumber`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, to])
+          }
+        ).then(x => x.json())
+        console.log("fd_renumber:", {errorCode, fd, to})
+        testTxtFd = to
+      } catch(e) { console.error(e) }
+
+      // fd_datasync
+      try {
+        const fd = testTxtFd
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_datasync`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd])
+          }
+        ).then(x => x.json())
+        console.log("fd_datasync:", {errorCode, fd})
+      } catch(e) { console.error(e) }
+
+      // fd_sync
+      try {
+        const fd = testTxtFd
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_sync`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd])
+          }
+        ).then(x => x.json())
+        console.log("fd_sync:", {errorCode, fd})
+      } catch(e) { console.error(e) }
+
+      // fd_tell
+      // sharedBuffer: [
+      //   ...
+      //   [offsetPtr, 8],
+      // ]
+      try {
+        const fd = testTxtFd
+        const offsetPtr = align(sharedBufferEnd, 8)
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_tell`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, offsetPtr])
+          }
+        ).then(x => x.json())
+        const offset = new BigUint64Array(sharedBuffer, offsetPtr, 1)[0];
+        console.log("fd_tell:", {errorCode, fd, offset})
+        sharedBufferEnd = offsetPtr + 8
+      } catch(e) { console.error(e) }
+
+      // fd_pwrite
+      // sharedBuffer: [
+      //   ...
+      //   [iovsPtr, iovsLen*8],
+      //   [nwittenPtr, 4],
+      //   [iovsBufPtr, written.length],
+      // ]
+      try {
+        const iovsPtr = align(sharedBufferEnd, 4) // align to 4
+        const iovsLen = 1
+        const writtenText = " And this is from fd_pwrite."
+        const written = new TextEncoder().encode(writtenText)
+        const nwrittenPtr = align(iovsPtr + iovsLen*8, 4)
+        const iovsBufPtr = nwrittenPtr + 4
+        const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
+        iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
+        iovs.setInt32(4, written.length, true) // iovs.buf_len
+        const pathArray = new Uint8Array(sharedBuffer, iovsBufPtr, written.length)
+        for(let i = 0, l = written.length; i < l; i++) {
+          pathArray[i] = written[i]
+        }
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_pwrite`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              testTxtFd,
+              iovsPtr,
+              iovsLen,
+              19, // offset
+              nwrittenPtr
+            ])
+          }
+        ).then(x => x.json())
+        const nwritten = new Int32Array(sharedBuffer, nwrittenPtr, 1)[0];
+        console.log("fd_pwrite:", {errorCode, nwritten, writtenText, written})
+        sharedBufferEnd = iovsBufPtr + written.length
+      } catch(e) { console.error(e) }
+
+      // fd_pread
+      // sharedBuffer: [
+      //   ...
+      //   [iovsPtr, iovsLen*8],
+      //   [nreadPtr, 4],
+      //   [iovsBufPtr, 128],
+      // ]
+      try {
+        // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec_array-listiovec Size: 8 Alignment: 4
+        const iovsPtr = align(sharedBufferEnd, 4) // align to 4 https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec-record
+        const iovsLen = 1
+        const nreadPtr = align(iovsPtr + iovsLen*8, 4)
+        const iovsBufPtr = nreadPtr + 4
+        const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
+        iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
+        iovs.setInt32(4, 128, true) // iovs.buf_len
+        const offset = 4
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_pread`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              testTxtFd,
+              iovsPtr,
+              iovsLen,
+              offset,
+              nreadPtr
+            ])
+          }
+        ).then(x => x.json())
+        const nread = new Int32Array(sharedBuffer, nreadPtr, 1)[0]
+        const read = new TextDecoder().decode(new Uint8Array(sharedBuffer, iovsBufPtr, nread))
+        console.log("fd_pread:", {errorCode, offset, nread, read})
+        sharedBufferEnd = iovsBufPtr + 128
+      } catch(e) { console.error(e) }
+
+      // fd_seek
+      // sharedBuffer: [
+      //   ...
+      //   [newoffsetPtr, 8]
+      // ]
+      try {
+        const newoffsetPtr = align(sharedBufferEnd, 8) // align to 8 https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-filesize-u64
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_seek`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              testTxtFd,
+              0, // offset
+              0, // whence set, Seek relative to start-of-file.
+              newoffsetPtr
+            ])
+          }
+        ).then(x => x.json())
+        const newoffset = new BigUint64Array(sharedBuffer, newoffsetPtr, 1)[0];
+        console.log("fd_seek:", {errorCode, newoffset})
+        sharedBufferEnd = newoffsetPtr + 8
+      } catch(e) { console.error(e) }
+
+      // fd_read
+      // sharedBuffer: [
+      //   ...
+      //   [iovsPtr, iovsLen*8],
+      //   [nreadPtr, 4],
+      //   [iovsBufPtr, 128],
+      // ]
+      try {
+        // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-iovec_array-listiovec Size: 8 Alignment: 4
+        const iovsPtr = align(sharedBufferEnd, 4) // align to 4
+        const iovsLen = 1
+        const nreadPtr = align(iovsPtr + iovsLen*8, 4)
+        const iovsBufPtr = nreadPtr + 4
+        const iovs = new DataView(sharedBuffer, iovsPtr, iovsLen*8)
+        iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
+        iovs.setInt32(4, 128, true) // iovs.buf_len
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_read`,
+          {
+            method: 'POST',
+            body: JSON.stringify([testTxtFd, iovsPtr, iovsLen, nreadPtr])
+          }
+        ).then(x => x.json())
+        const nread = new Int32Array(sharedBuffer, nreadPtr, 1)[0];
+        const read = new TextDecoder().decode(new Uint8Array(sharedBuffer, iovsBufPtr, nread))
+        console.log("fd_read:", {errorCode, nread, read})
+        sharedBufferEnd = iovsBufPtr + 128
+      } catch(e) { console.error(e) }
+        
+      // path_create_directory
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      // ]
+      try {
+        const fd = rootFd
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_create_directory`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              pathPtr,
+              pathLen,
+            ])
+          }
+        ).then(x => x.json())
+        console.log("path_create_directory:", {errorCode, pathPtr, pathLen})
+        sharedBufferEnd = pathPtr + pathLen
+      } catch(e) { console.error(e) }
+
+      // Only NTFS supports symbolic links in Windows, and only with administrator privileges.
+      // path_symlink
+      // sharedBuffer: [
+      //   ...
+      //   [oldPathPtr, oldPathLen],
+      //   [newPathPtr, newPathLen],
+      // ]
+      try {
+        const [oldPathPtr, oldPathLen] = writeStringIntoSharedBuffer(
+          "test.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const fd = rootFd
+        const [newPathPtr, newPathLen] = writeStringIntoSharedBuffer(
+          "test-symlink.txt",
+          sharedBuffer,
+          align(oldPathPtr + oldPathLen, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_symlink`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              oldPathPtr,
+              oldPathLen,
+              fd,
+              newPathPtr,
+              newPathLen,
+            ])
+          }
+        ).then(x => x.json())
+        console.log('path_symlink:', {errorCode, oldPathPtr, oldPathLen, fd, newPathPtr, newPathLen})
+        sharedBufferEnd = newPathPtr + newPathLen
+      } catch(e) { console.error(e) }
+        
+      // path_link
+      // sharedBuffer: [
+      //   ...
+      //   [oldPathPtr, oldPathLen],
+      //   [newPathPtr, newPathLen],
+      // ]
+      try {
+        const [oldPathPtr, oldPathLen] = writeStringIntoSharedBuffer(
+          "test.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const oldFd = rootFd
+        const oldFlags = 0 << 0 // dirflags
+        const newFd = rootFd
+        const [newPathPtr, newPathLen] = writeStringIntoSharedBuffer(
+          "test-link.txt",
+          sharedBuffer,
+          align(oldPathPtr + oldPathLen, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_link`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              oldFd,
+              oldFlags,
+              oldPathPtr,
+              oldPathLen,
+              newFd,
+              newPathPtr,
+              newPathLen,
+            ])
+          }
+        ).then(x => x.json())
+        console.log('path_link:', {errorCode, oldFd, oldFlags, oldPathPtr, oldPathLen, newFd, newPathPtr, newPathLen})
+        sharedBufferEnd = newPathPtr + newPathLen
+      } catch(e) { console.error(e) }
+
+      // path_rename
+      // sharedBuffer: [
+      //   ...
+      //   [oldPathPtr, oldPathLen],
+      //   [newPathPtr, newPathLen],
+      // ]
+      try {
+        const [oldPathPtr, oldPathLen] = writeStringIntoSharedBuffer(
+          "test-link.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const fd = rootFd
+        const newFd = rootFd
+        const [newPathPtr, newPathLen] = writeStringIntoSharedBuffer(
+          "test-link-rename.txt",
+          sharedBuffer,
+          align(oldPathPtr + oldPathLen, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_rename`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              oldPathPtr,
+              oldPathLen,
+              newFd,
+              newPathPtr,
+              newPathLen,
+            ])
+          }
+        ).then(x => x.json())
+        console.log('path_rename:', {errorCode, fd, oldPathPtr, oldPathLen, newFd, newPathPtr, newPathLen})
+        sharedBufferEnd = newPathPtr + newPathLen
+      } catch(e) { console.error(e) }
+
+      // path_filestat_get
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      //   [bufPtr, bufLen],
+      // ]
+      try {
+        const fd = rootFd
+        const flags = 0 << 0 // dirflags
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test-link-rename.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const bufPtr = align(sharedBufferEnd, 8)
+        const bufLen = 64
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_filestat_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              flags,
+              pathPtr,
+              pathLen,
+              bufPtr,
+            ])
+          }
+        ).then(x => x.json())
+        const filestat = new BigUint64Array(sharedBuffer, bufPtr, bufLen/8);
+        const filetype = new Uint8Array(sharedBuffer, bufPtr + 2*8, 1)[0]
+        console.log("path_filestat_get:", {errorCode, fd, flags, pathPtr, pathLen, bufPtr, bufLen, filestat, filetype})
+        sharedBufferEnd = bufPtr + bufLen
+      } catch(e) { console.error(e) }
+
+      // path_filestat_set_times
+      try {
+        const fd = rootFd
+        const flags = 0 << 0
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test-link-rename.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const atim = new Date().getTime()
+        const mtim = new Date().getTime()
+        const fst_flags = 
+          1 << 0 | // atim
+          1 << 2 // mtim
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_filestat_set_times`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              flags,
+              pathPtr,
+              pathLen,
+              atim,
+              mtim,
+              fst_flags
+            ])
+          }
+        ).then(x => x.json())
+        console.log("path_filestat_set_times:", {errorCode, fd, atim, mtim, fst_flags})
+      } catch(e) { console.error(e) }
+
+      // fd_readdir
+      // sharedBuffer: [
+      //   ...
+      //   [bufusedPtr, 4],
+      //   [buf, bufused],
+      // ]
+      try {
+        const fd = rootFd
+        const bufusedPtr = align(sharedBufferEnd, 4)
+        const buf = align(bufusedPtr + 4, 4)
+        const bufLen = sharedBuffer.byteLength - buf
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_readdir`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              buf,
+              bufLen,
+              0, // cookie
+              bufusedPtr,
+            ])
+          }
+        ).then(x => x.json())
+        const bufused = new Int32Array(sharedBuffer, bufusedPtr, 1)[0];
+        console.log('fd_readdir:', {errorCode, fd, bufusedPtr, buf, bufused})
+        sharedBufferEnd = buf + bufused
+      } catch(e) { console.error(e) }
+        
+      // path_unlink_file
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      // ]
+      try {
+        const fd = rootFd
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test-link-rename.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_unlink_file`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              pathPtr,
+              pathLen
+            ])
+          }
+        ).then(x => x.json())
+        console.log("path_unlink_file:", {errorCode, fd, pathPtr, pathLen})
+        sharedBufferEnd = pathPtr + pathLen
+      } catch(e) { console.error(e) }
+
+      // path_remove_directory
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      // ]
+      try {
+        const fd = rootFd
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_remove_directory`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              pathPtr,
+              pathLen,
+            ])
+          }
+        ).then(x => x.json())
+        console.log("path_remove_directory:", {errorCode, fd, pathPtr, pathLen})
+        sharedBufferEnd = pathPtr + pathLen
+      } catch(e) { console.error(e) }
+
+      // fd_close
+      try {
+        const fd = testTxtFd
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/fd_close`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd])
+          }
+        ).then(x => x.json())
+        console.log("fd_close:", {errorCode, fd})
+      } catch(e) { console.error(e) }
+
+      // path_unlink_file
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      // ]
+      try {
+        const fd = rootFd
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_unlink_file`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              pathPtr,
+              pathLen
+            ])
+          }
+        ).then(x => x.json())
+        console.log("path_unlink_file:", {errorCode, fd, pathPtr, pathLen})
+        sharedBufferEnd = pathPtr + pathLen
+      } catch(e) { console.error(e) }
+
+      // Only NTFS supports symbolic links in Windows, and only with administrator privileges.
+      // path_readlink
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      //   [bufusedPtr, 4],
+      //   [buf, bufused],
+      // ]
+      try {
+        const fd = rootFd
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test-symlink.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const bufusedPtr = align(pathPtr + pathLen, 4)
+        const buf = align(bufusedPtr + 4, 4)
+        const bufLen = sharedBuffer.byteLength - buf
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_readlink`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              pathPtr,
+              pathLen,
+              buf,
+              bufLen,
+              bufusedPtr,
+            ])
+          }
+        ).then(x => x.json())
+        const bufused = new Int32Array(sharedBuffer, bufusedPtr, 1)[0];
+        console.log("path_readlink:", {errorCode, fd, pathPtr, pathLen, buf, bufLen, bufusedPtr, bufused})
+        sharedBufferEnd = buf + bufused 
+      } catch(e) { console.error(e) }
+
+      // path_unlink_file
+      // sharedBuffer: [
+      //   ...
+      //   [pathPtr, pathLen],
+      // ]
+      try {
+        const fd = rootFd
+        const [pathPtr, pathLen] = writeStringIntoSharedBuffer(
+          "test-symlink.txt",
+          sharedBuffer,
+          align(sharedBufferEnd, 4)
+        )
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/path_unlink_file`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              pathPtr,
+              pathLen
+            ])
+          }
+        ).then(x => x.json())
+        console.log("path_unlink_file:", {errorCode, fd, pathPtr, pathLen})
+        sharedBufferEnd = pathPtr + pathLen
+      } catch(e) { console.error(e) }
     })
   </script>
 

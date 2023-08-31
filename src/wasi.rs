@@ -170,9 +170,9 @@ impl Wasi<'_> {
     //   return ERRNO_SUCCESS;
     // }
 
-    let filestat = self.ctx.fd_fdstat_get(fd.try_into()?).await?;
-    dbg!(&filestat);
-    let _ = wiggle::GuestPtr::new(&self.shared_memory, fdstat_ptr.try_into()?).write(filestat)?;
+    let fdstat = self.ctx.fd_fdstat_get(fd.try_into()?).await?;
+    dbg!(&fdstat);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, fdstat_ptr.try_into()?).write(fdstat)?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
   }
@@ -208,7 +208,11 @@ impl Wasi<'_> {
       fs_rights_base, // The desired rights of the file descriptor.
       fs_rights_inheriting,
     ) = serde_json::from_str::<(i32, i64, i64)>(std::str::from_utf8(request)?)?;
-    dbg!(fd, fs_rights_base, fs_rights_inheriting);
+    dbg!(
+      fd, 
+      format!("{:#b}", fs_rights_base),
+      format!("{:#b}", fs_rights_inheriting),
+    );
     // TODO right check
 
     // TODO
@@ -567,6 +571,128 @@ impl Wasi<'_> {
   }
 
   #[tokio::main(flavor = "current_thread")]
+  pub async fn path_create_directory(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      fd, // The file descriptor.
+      path_ptr, // A memory location that holds the path name.
+      path_len, // The length of the path
+    ) = serde_json::from_str::<(i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, path_ptr, path_len);
+    let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
+
+    let _ = self.ctx.path_create_directory(fd.try_into()?, path).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn path_filestat_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      fd, // The file descriptor.
+      flags, // Flags determining the method of how the path is resolved.
+      path_ptr, // A memory location that holds the path name.
+      path_len, // The length of the path
+      buf, // A memory location to store the file stat.
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, flags, path_ptr, path_len, buf);
+    // TODO right check
+
+    // TODO
+    // if iovs_len == 0 {
+    //   *nread_ptr = 0;
+    //   return ERRNO_SUCCESS;
+    // }
+
+    let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
+
+    // fd need to be a file fd, not a folder.
+    let filestat = self.ctx.path_filestat_get(
+      fd.try_into()?,
+      flags.try_into()?,
+      path,
+    ).await?;
+    dbg!(&filestat);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, buf.try_into()?).write(filestat)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn path_filestat_set_times(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+    let (
+      fd, // The file descriptor.
+      flags, // Flags determining the method of how the path is resolved.
+      path_ptr, // A memory location that holds the path name.
+      path_len, // The length of the path
+      atim, // The desired values of the data access timestamp.
+      mtim, // The desired values of the data modification timestamp.
+      fst_flags, // A bitmask indicating which timestamps to adjust.
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i64, i64, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(
+      fd,
+      format!("{:#b}", flags),
+      path_ptr,
+      path_len,
+      atim,
+      mtim,
+      format!("{:#b}", fst_flags),
+    );
+    // TODO right check
+
+    // TODO
+    // if iovs_len == 0 {
+    //   *nread_ptr = 0;
+    //   return ERRNO_SUCCESS;
+    // }
+
+    let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
+
+    // fd need to be a file fd, not a folder.
+    let _ = self.ctx.path_filestat_set_times(
+      fd.try_into()?,
+      flags.try_into()?,
+      path,
+      atim.try_into()?,
+      mtim.try_into()?,
+      fst_flags.try_into()?,
+    ).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn path_link(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let (
+      old_fd, // The file descriptor.
+      old_flags, // Flags determining the method of how the path is resolved.
+      old_path_ptr, // A memory location that holds the contents of the symbolic link.
+      old_path_len, // The length of the old path.
+      new_fd, // The working directory at which the resolution of the new path starts.
+      new_path_ptr, // A memory location that holds the destination path at which to create the symbolic link.
+      new_path_len, // The length of the new path.
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(old_fd, old_flags, old_path_ptr, old_path_len, new_fd, new_path_ptr, new_path_len);
+
+    let old_path = &wiggle::GuestPtr::new(&self.shared_memory, (old_path_ptr.try_into()?, old_path_len.try_into()?));
+    let new_path = &wiggle::GuestPtr::new(&self.shared_memory, (new_path_ptr.try_into()?, new_path_len.try_into()?));
+
+    let _ = self.ctx.path_link(
+      old_fd.try_into()?,
+      old_flags.try_into()?,
+      old_path.try_into()?,
+      new_fd.try_into()?,
+      new_path.try_into()?,
+    ).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
   pub async fn path_open(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
     let (
       fd, // The file descriptor.
@@ -579,7 +705,17 @@ impl Wasi<'_> {
       fdflags, // The fd flags.
       fd_ptr, // A memory location to store the opened file descriptor.
     ) = serde_json::from_str::<(i32, i32, i32, i32, i32, i64, i64, i32, i32)>(std::str::from_utf8(request)?)?;
-    dbg!(fd, dirflags, path_ptr, path_len, oflags, fs_rights_base, fs_rights_inheriting, fdflags, fd_ptr);
+    dbg!(
+      fd,
+      format!("{:#b}", dirflags),
+      path_ptr,
+      path_len,
+      format!("{:#b}", oflags),
+      format!("{:#b}", fs_rights_base),
+      format!("{:#b}", fs_rights_inheriting),
+      format!("{:#b}", fdflags),
+      fd_ptr
+    );
 
     let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
     let fd = self.ctx.path_open(
@@ -591,7 +727,37 @@ impl Wasi<'_> {
       fs_rights_inheriting.try_into()?,
       fdflags.try_into()?,
     ).await?;
+    dbg!(fd);
     let _ = wiggle::GuestPtr::new(&self.shared_memory, fd_ptr.try_into()?).write(fd)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn path_readlink(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      fd,
+      path_ptr,
+      path_len,
+      buf,
+      buf_len,
+      bufused_ptr,
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, path_ptr, path_len, buf, buf_len);
+    let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
+    let buf_ptr = &wiggle::GuestPtr::new(&self.shared_memory, buf.try_into()?);
+
+    let bufused = self.ctx.path_readlink(
+      fd.try_into()?,
+      path,
+      buf_ptr.try_into()?,
+      buf_len.try_into()?
+    ).await?;
+
+    dbg!(bufused);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, bufused_ptr.try_into()?).write(bufused)?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
   }
@@ -609,6 +775,55 @@ impl Wasi<'_> {
     let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
 
     let _ = self.ctx.path_remove_directory(fd.try_into()?, path).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn path_rename(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let (
+      fd, // The file descriptor. old path should be relative to fd.
+      old_path_ptr, // A memory location that holds the contents of the symbolic link.
+      old_path_len, // The length of the old path.
+      new_fd, // The working directory at which the resolution of the new path starts.
+      new_path_ptr, // A memory location that holds the destination path at which to create the symbolic link.
+      new_path_len, // The length of the new path.
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, old_path_ptr, old_path_len, new_fd, new_path_ptr, new_path_len);
+
+    let old_path = &wiggle::GuestPtr::new(&self.shared_memory, (old_path_ptr.try_into()?, old_path_len.try_into()?));
+    let new_path = &wiggle::GuestPtr::new(&self.shared_memory, (new_path_ptr.try_into()?, new_path_len.try_into()?));
+
+    let _ = self.ctx.path_rename(
+      fd.try_into()?,
+      old_path.try_into()?,
+      new_fd.try_into()?,
+      new_path.try_into()?,
+    ).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  // Only NTFS supports symbolic links in Windows, and only with administrator privileges.
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn path_symlink(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let (
+      old_path_ptr, // A memory location that holds the contents of the symbolic link.
+      old_path_len, // The length of the old path.
+      fd, // The file descriptor. old path should be relative to fd.
+      new_path_ptr, // A memory location that holds the destination path at which to create the symbolic link.
+      new_path_len, // The length of the new path.
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(old_path_ptr, old_path_len, fd, new_path_ptr, new_path_len);
+
+    let old_path = &wiggle::GuestPtr::new(&self.shared_memory, (old_path_ptr.try_into()?, old_path_len.try_into()?));
+    let new_path = &wiggle::GuestPtr::new(&self.shared_memory, (new_path_ptr.try_into()?, new_path_len.try_into()?));
+
+    let _ = self.ctx.path_symlink(
+      old_path.try_into()?,
+      fd.try_into()?,
+      new_path.try_into()?,
+    ).await?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
   }
