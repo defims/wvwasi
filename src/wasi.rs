@@ -16,12 +16,13 @@ pub struct Wasi<'a> {
   pub shared_buffer: ICoreWebView2SharedBuffer, // windows use ICoreWebView2SharedBuffer, others use a polyfill (host buffer with custom protocol access api)
   pub shared_memory: wiggle::wasmtime::WasmtimeGuestMemory<'a>,
   pub root_fd: u32,
+  pub socket_fd: u32,
 }
 
 impl Wasi<'_> {
   pub fn new<'a>(env: &ICoreWebView2Environment, options: Option<WvWasiOptions<'a>>) -> anyhow::Result<Self> {
-    let buf_len = 10240; // TODO config
-    let ctx = wasi_cap_std_sync::WasiCtxBuilder::new().build();
+    let buf_len = 102400; // TODO config
+    let mut ctx = wasi_cap_std_sync::WasiCtxBuilder::new().build();
     // let stdin = table.push_input_stream(stdin).context("stdin")?; // TODO
     // let stdout = table.push_output_stream(stdout).context("stdout")?; // TODO
     // let stderr = table.push_output_stream(stderr).context("stderr")?; // TODO
@@ -34,12 +35,33 @@ impl Wasi<'_> {
       Ok(wasi_cap_std_sync::dir::Dir::from_cap_std(dir))
     }
 
+    // preopen socket
+    let address = "127.0.0.1:9999"; // TODO
+    let stdlistener = std::net::TcpListener::bind(address)?;
+    // let _ = stdlistener.set_nonblocking(true)?; // nonblock
+
+    let socket = wasi_cap_std_sync::TcpListener::from_std(stdlistener);
+    let socket: wasi_cap_std_sync::net::Socket = socket.into();
+    let file: Box<dyn wasi_common::file::WasiFile> = socket.into(); // wasi-cap-std-sync-10.0.1/src/lib.rs preopened_socket
+    let socket_fd = ctx.push_file(file, wasi_common::file::FileAccessMode::READ | wasi_common::file::FileAccessMode::WRITE)?;
+
+    // root_fd
     let temp_dir = std::env::temp_dir();// default root path is temp_dir
     let root_fd = ctx.push_dir(
       Box::new(get_host_dir(temp_dir.as_path())?),
       std::path::Path::new("/").to_path_buf()
     )?;
     // let root_fd = types::Fd::from(root_fd); // root_fd == 3
+
+    // args push args in ctx
+    for arg in std::env::args() {
+      let _ = ctx.push_arg(&arg);
+    }
+
+    // envs push envs in ctx
+    for (var, value) in std::env::vars() {
+      let _ = ctx.push_env(var.as_str(), value.as_str());
+    }
 
     if let Some(WvWasiOptions { preopens }) = options {
       for WvWasiPreopen { guest_path, path } in preopens.into_iter() {
@@ -71,8 +93,124 @@ impl Wasi<'_> {
       ctx,
       shared_buffer,
       shared_memory,
-      root_fd
+      root_fd,
+      socket_fd,
     })
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn args_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      argv_ptr,
+      argv_buf_ptr,
+    ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(&argv_ptr, &argv_buf_ptr);
+
+    // TODO argument error detect
+
+    let argv = &wiggle::GuestPtr::new(&self.shared_memory, argv_ptr.try_into()?);
+    let argv_buf = &wiggle::GuestPtr::new(&self.shared_memory, argv_buf_ptr.try_into()?);
+    dbg!(&argv, &argv_buf);
+    let _ = self.ctx.args_get(argv, argv_buf).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn args_sizes_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      argc_ptr,
+      argv_buf_size_ptr,
+    ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(&argc_ptr, &argv_buf_size_ptr);
+
+    // TODO argument error detect
+
+    let (argc, argv_buf_size) = self.ctx.args_sizes_get().await?;
+    dbg!(argc, argv_buf_size);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, argc_ptr.try_into()?).write(argc)?;
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, argv_buf_size_ptr.try_into()?).write(argv_buf_size)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn environ_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      environ_ptr,
+      environ_buf_ptr,
+    ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(&environ_ptr, &environ_buf_ptr);
+
+    // TODO argument error detect
+
+    let environ = &wiggle::GuestPtr::new(&self.shared_memory, environ_ptr.try_into()?);
+    let environ_buf = &wiggle::GuestPtr::new(&self.shared_memory, environ_buf_ptr.try_into()?);
+    dbg!(&environ, &environ_buf);
+    let _ = self.ctx.environ_get(environ, environ_buf).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn environ_sizes_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      environ_count_ptr,
+      environ_buf_size_ptr,
+    ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(&environ_count_ptr, &environ_buf_size_ptr);
+
+    // TODO argument error detect
+
+    let (environ_count, environ_buf_size) = self.ctx.environ_sizes_get().await?;
+    dbg!(environ_count, environ_buf_size);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, environ_count_ptr.try_into()?).write(environ_count)?;
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, environ_buf_size_ptr.try_into()?).write(environ_buf_size)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn clock_res_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      clockid,
+      resolution_ptr,
+    ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(&clockid, &resolution_ptr);
+
+    let resolution = self.ctx.clock_res_get(clockid.try_into()?).await?;
+    dbg!(resolution);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, resolution_ptr.try_into()?).write(resolution)?;
+    dbg!("test");
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn clock_time_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      id,
+      precision,
+      time_ptr,
+    ) = serde_json::from_str::<(i32, i64, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(&id, &precision, &time_ptr);
+
+    let time = self.ctx.clock_time_get(id.try_into()?, precision.try_into()?).await?;
+    dbg!(time);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, time_ptr.try_into()?).write(time)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
   }
 
   #[tokio::main(flavor = "current_thread")]
@@ -86,9 +224,6 @@ impl Wasi<'_> {
       advice, // The advice.
     ) = serde_json::from_str::<(i32, i64, i64, i32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, offset, len, advice);
-
-    // TODO right check
-    // TODO argument error detect
 
     let _ = self.ctx.fd_advise(fd.try_into()?, offset.try_into()?, len.try_into()?, advice.try_into()?).await?;
 
@@ -111,9 +246,6 @@ impl Wasi<'_> {
     ) = serde_json::from_str::<(i32, i64, i64)>(std::str::from_utf8(request)?)?;
     dbg!(fd, offset, len);
 
-    // TODO right check
-    // TODO argument error detect
-
     let _ = self.ctx.fd_allocate(fd.try_into()?, offset.try_into()?, len.try_into()?).await?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
@@ -127,9 +259,6 @@ impl Wasi<'_> {
       fd, // The file descriptor.
     ) = serde_json::from_str::<(u32,)>(std::str::from_utf8(request)?)?;
     dbg!(fd);
-
-    // TODO right check
-    // TODO argument error detect
 
     let _ = self.ctx.fd_close(fd.try_into()?).await?;
 
@@ -145,9 +274,6 @@ impl Wasi<'_> {
     ) = serde_json::from_str::<(u32,)>(std::str::from_utf8(request)?)?;
     dbg!(fd);
 
-    // TODO right check
-    // TODO argument error detect
-
     let _ = self.ctx.fd_datasync(fd.try_into()?).await?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
@@ -162,13 +288,6 @@ impl Wasi<'_> {
       fdstat_ptr // The buffer where the file's attributes are stored.
     ) = serde_json::from_str::<(u32, u32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, fdstat_ptr);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     let fdstat = self.ctx.fd_fdstat_get(fd.try_into()?).await?;
     dbg!(&fdstat);
@@ -186,13 +305,6 @@ impl Wasi<'_> {
       flags, // The desired file size.
     ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, flags);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     let _ = self.ctx.fd_fdstat_set_flags(fd.try_into()?, flags.try_into()?).await?;
 
@@ -213,13 +325,6 @@ impl Wasi<'_> {
       format!("{:#b}", fs_rights_base),
       format!("{:#b}", fs_rights_inheriting),
     );
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     let _ = self.ctx.fd_fdstat_set_rights(fd.try_into()?, fs_rights_base.try_into()?, fs_rights_inheriting.try_into()?).await?;
 
@@ -235,13 +340,6 @@ impl Wasi<'_> {
       filestat_ptr // The buffer where the file's attributes are stored.
     ) = serde_json::from_str::<(u32, u32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, filestat_ptr);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     // fd need to be a file fd, not a folder.
     let filestat = self.ctx.fd_filestat_get(fd.try_into()?).await?;
@@ -260,13 +358,6 @@ impl Wasi<'_> {
       size, // The desired file size.
     ) = serde_json::from_str::<(u32, u64)>(std::str::from_utf8(request)?)?;
     dbg!(fd, size);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     // fd need to be a file fd, not a folder.
     let _ = self.ctx.fd_filestat_set_size(fd.try_into()?, size.try_into()?).await?;
@@ -285,13 +376,6 @@ impl Wasi<'_> {
       fst_flags, // A bitmask indicating which timestamps to adjust.
     ) = serde_json::from_str::<(i32, i64, i64, i32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, atim, mtim, fst_flags);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     // fd need to be a file fd, not a folder.
     let _ = self.ctx.fd_filestat_set_times(fd.try_into()?, atim.try_into()?, mtim.try_into()?, fst_flags.try_into()?).await?;
@@ -311,13 +395,6 @@ impl Wasi<'_> {
       nread_ptr // A memory location to store the bytes read.
     ) = serde_json::from_str::<(i32, i32, i32, i64, i32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, iovs_ptr, iovs_len, offset, nread_ptr);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     // convert ivos_ptr and ivos_len to preview_1::types::IvosArray
     // iovs_ptr need to align to iovs_array's alignment 4.
@@ -341,9 +418,6 @@ impl Wasi<'_> {
     ) = serde_json::from_str::<(u32, u32)>(std::str::from_utf8(request)?)?;
     dbg!(&fd, &buf_ptr);
 
-    // TODO right check
-    // TODO argument error detect
-
     let prestat = self.ctx.fd_prestat_get(fd.try_into()?).await?;
     dbg!(&prestat);
     let _ = wiggle::GuestPtr::new(&self.shared_memory, buf_ptr.try_into()?).write(prestat)?;
@@ -361,9 +435,6 @@ impl Wasi<'_> {
       path_len, // The length of the path.
     ) = serde_json::from_str::<(u32, u32, u32)>(std::str::from_utf8(request)?)?;
     dbg!(&path, &path_len);
-
-    // TODO right check
-    // TODO argument error detect
 
     let path_ptr = &wiggle::GuestPtr::new(&self.shared_memory, path);
     let _ = self.ctx.fd_prestat_dir_name(fd.try_into()?, path_ptr, path_len.try_into()?).await?;
@@ -383,13 +454,6 @@ impl Wasi<'_> {
       nwritten_ptr // A memory location to store the bytes written.
     ) = serde_json::from_str::<(u32, u32, u32, u64, u32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, iovs_ptr, iovs_len, nwritten_ptr);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     // convert ivos_ptr and ivos_len to preview_1::types::CivosArray
     // iovs_ptr need to align to iovs_array's alignment 4.
@@ -418,13 +482,6 @@ impl Wasi<'_> {
       nread_ptr // A memory location to store the bytes read.
     ) = serde_json::from_str::<(i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, iovs_ptr, iovs_len, nread_ptr);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     // convert ivos_ptr and ivos_len to preview_1::types::IvosArray
     // iovs_ptr need to align to iovs_array's alignment 4.
@@ -451,7 +508,6 @@ impl Wasi<'_> {
       bufused_ptr // The number of bytes stored in the read buffer.
     ) = serde_json::from_str::<(u32, u32, u32, u64, u32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, buf_ptr, buf_len, cookie, bufused_ptr);
-    // TODO right check
 
     let buf = &wiggle::GuestPtr::new(&self.shared_memory, buf_ptr);
     let bufused = self.ctx.fd_readdir(fd.try_into()?, buf, buf_len.try_into()?, cookie).await?;
@@ -471,9 +527,6 @@ impl Wasi<'_> {
     ) = serde_json::from_str::<(u32, u32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, to);
 
-    // TODO right check
-    // TODO argument error detect
-
     let _ = self.ctx.fd_renumber(fd.try_into()?, to.try_into()?).await?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
@@ -491,9 +544,6 @@ impl Wasi<'_> {
     ) = serde_json::from_str::<(u32, u64, u32, u32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, offset, whence, newoffset_ptr);
 
-    // TODO right check
-    // TODO argument error detect
-
     let newoffset = self.ctx.fd_seek(fd.try_into()?, offset.try_into()?, (whence as u8).try_into()?).await?;
     dbg!(&newoffset);
     let _ = wiggle::GuestPtr::new(&self.shared_memory, newoffset_ptr.try_into()?).write(newoffset)?;
@@ -510,9 +560,6 @@ impl Wasi<'_> {
     ) = serde_json::from_str::<(u32,)>(std::str::from_utf8(request)?)?;
     dbg!(fd);
 
-    // TODO right check
-    // TODO argument error detect
-
     let _ = self.ctx.fd_sync(fd.try_into()?).await?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
@@ -527,9 +574,6 @@ impl Wasi<'_> {
       offset_ptr, // A memory location to store the current offset of the file descriptor, relative to the start of the file.
     ) = serde_json::from_str::<(u32, u64)>(std::str::from_utf8(request)?)?;
     dbg!(fd, offset_ptr);
-
-    // TODO right check
-    // TODO argument error detect
 
     let offset = self.ctx.fd_tell(fd.try_into()?).await?;
     dbg!(&offset);
@@ -549,13 +593,6 @@ impl Wasi<'_> {
       nwritten_ptr // A memory location to store the bytes written.
     ) = serde_json::from_str::<(u32, u32, u32, u32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, iovs_ptr, iovs_len, nwritten_ptr);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     // convert ivos_ptr and ivos_len to preview_1::types::CivosArray
     // iovs_ptr need to align to iovs_array's alignment 4.
@@ -599,13 +636,6 @@ impl Wasi<'_> {
       buf, // A memory location to store the file stat.
     ) = serde_json::from_str::<(i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
     dbg!(fd, flags, path_ptr, path_len, buf);
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
 
@@ -642,13 +672,6 @@ impl Wasi<'_> {
       mtim,
       format!("{:#b}", fst_flags),
     );
-    // TODO right check
-
-    // TODO
-    // if iovs_len == 0 {
-    //   *nread_ptr = 0;
-    //   return ERRNO_SUCCESS;
-    // }
 
     let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
 
@@ -841,6 +864,173 @@ impl Wasi<'_> {
     let path = &wiggle::GuestPtr::new(&self.shared_memory, (path_ptr.try_into()?, path_len.try_into()?));
 
     let _ = self.ctx.path_unlink_file(fd.try_into()?, path).await?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn poll_oneoff(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      in_ptr,
+      out_ptr,
+      nsubscriptions,
+      nevents_ptr,
+    ) = serde_json::from_str::<(i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(in_ptr, out_ptr, nsubscriptions, nevents_ptr);
+    let r#in = &wiggle::GuestPtr::new(&self.shared_memory, in_ptr.try_into()?);
+    let out = &wiggle::GuestPtr::new(&self.shared_memory, out_ptr.try_into()?);
+
+    let nevents = self.ctx.poll_oneoff(r#in.try_into()?, out.try_into()?, nsubscriptions.try_into()?).await?;
+
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, nevents_ptr.try_into()?).write(nevents)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn proc_exit(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      rval,
+    ) = serde_json::from_str::<(i32,)>(std::str::from_utf8(request)?)?;
+    dbg!(rval);
+
+    let _ = self.ctx.proc_exit(rval as u32);
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn proc_raise(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      sig,
+    ) = serde_json::from_str::<(i32,)>(std::str::from_utf8(request)?)?;
+    dbg!(sig);
+
+    let _ = self.ctx.proc_raise(sig.try_into()?);
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn sched_yield(&mut self, _request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let _ = self.ctx.sched_yield();
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn random_get(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      buf_ptr,
+      buf_len,
+    ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(buf_ptr, buf_len);
+
+    let buf = &wiggle::GuestPtr::new(&self.shared_memory, buf_ptr.try_into()?);
+
+    let _ = self.ctx.random_get(buf.try_into()?, buf_len.try_into()?);
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn sock_accept(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      fd,
+      flags,
+      result_fd_ptr,
+    ) = serde_json::from_str::<(i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, flags, result_fd_ptr);
+
+    let result_fd = self.ctx.sock_accept(fd.try_into()?, flags.try_into()?).await?;
+    dbg!(result_fd);
+
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, result_fd_ptr.try_into()?).write(result_fd)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn sock_recv(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      fd, // The file descriptor.
+      ri_data_ptr, // List of scatter/gather vectors in which to store data.
+      ri_data_len, // The length of the iovs.
+      ri_flags, // The length of the iovs.
+      size_ptr, // A memory location to store the bytes read.
+      roflags_ptr, // A memory location to store the bytes read.
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, ri_data_ptr, ri_data_len, ri_flags, size_ptr, roflags_ptr);
+
+    // convert ivos_ptr and ivos_len to preview_1::types::IvosArray
+    // iovs_ptr need to align to iovs_array's alignment 4.
+    let ri_data = preview_1::types::IovecArray::new(&self.shared_memory, (ri_data_ptr.try_into()?, ri_data_len.try_into()?));
+    dbg!(ri_data.get(0).unwrap().read()?);
+
+    // fd need to be a file fd, not a folder.
+    let (size, roflags) = self.ctx.sock_recv(fd.try_into()?, &ri_data, ri_flags.try_into()?).await?;
+    dbg!(&size, &roflags);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, size_ptr.try_into()?).write(size)?;
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, roflags_ptr.try_into()?).write(roflags)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn sock_send(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+
+    let (
+      fd, // The file descriptor.
+      si_data_ptr, // List of scatter/gather vectors in which to store data.
+      si_data_len, // The length of the iovs.
+      si_flags, // The length of the iovs.
+      size_ptr, // A memory location to store the bytes read.
+    ) = serde_json::from_str::<(i32, i32, i32, i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, si_data_ptr, si_data_len, si_flags, size_ptr);
+
+    // convert ivos_ptr and ivos_len to preview_1::types::IvosArray
+    // iovs_ptr need to align to iovs_array's alignment 4.
+    let si_data = preview_1::types::CiovecArray::new(&self.shared_memory, (si_data_ptr.try_into()?, si_data_len.try_into()?));
+    dbg!(si_data.get(0).unwrap().read()?);
+
+    // fd need to be a file fd, not a folder.
+    let size = self.ctx.sock_send(fd.try_into()?, &si_data, si_flags.try_into()?).await?;
+    dbg!(&size);
+    let _ = wiggle::GuestPtr::new(&self.shared_memory, size_ptr.try_into()?).write(size)?;
+
+    Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
+  }
+
+  #[tokio::main(flavor = "current_thread")]
+  pub async fn sock_shutdown(&mut self, request: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use preview_1::wasi_snapshot_preview1::WasiSnapshotPreview1;
+    // use wasi_common::file::TableFileExt;
+    // use wasi_cap_std_sync::net::WasiFile;
+    // let socket: wasi_cap_std_sync::net::Socket = socket.into();
+    // socket TcpStream
+
+    let (
+      fd, // The file descriptor.
+      how, // The length of the iovs.
+    ) = serde_json::from_str::<(i32, i32)>(std::str::from_utf8(request)?)?;
+    dbg!(fd, how);
+
+    let _ = self.ctx.sock_shutdown(fd.try_into()?, how.try_into()?).await?;
 
     Ok(format!(r#"[{}]"#, Into::<u16>::into(Errno::Success)).as_bytes().to_owned())
   }

@@ -35,6 +35,7 @@ No magic, just IPC and sharedbuffer.
 1. [Webkit oppose File System Access API](https://webkit.org/standards-positions/).
 2. Unable to preopen system folder.
 3. You can not customize your own interface with high-performance communication mechanisms.
+4. You can use native system capabilities, such as sockets at the transport layer, without being limited to websockets at the application layer.
 
 ## API
 The WASI API is versioned. This documentation is based on the WASI [preview 1][]
@@ -44,9 +45,6 @@ additions/modifications:
 ### System Calls
 This section has been adapted from the official WASI API documentation.
 
-- [`wvwasi.wasiSnapshotPreview1.fd_readdir()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-fd_readdirfd-fd-buf-pointeru8-buf_len-size-cookie-dircookie---resultsize-errno)
-- [`wvwasi.wasiSnapshotPreview1.path_remove_directory()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-path_remove_directoryfd-fd-path-string---result-errno)
-- [`wvwasi.wasiSnapshotPreview1.path_unlink_file()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-path_unlink_filefd-fd-path-string---result-errno)
 - [`wvwasi.wasiSnapshotPreview1.fd_advise()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-fd_advisefd-fd-offset-filesize-len-filesize-advice-advice---result-errno)
 - [`wvwasi.wasiSnapshotPreview1.fd_allocate()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-fd_allocatefd-fd-offset-filesize-len-filesize---result-errno)
 - [`wvwasi.wasiSnapshotPreview1.fd_close()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-fd_closefd-fd---result-errno)
@@ -78,6 +76,15 @@ This section has been adapted from the official WASI API documentation.
 - [`wvwasi.wasiSnapshotPreview1.path_rename()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-path_renamefd-fd-old_path-string-new_fd-fd-new_path-string---result-errno)
 - [`wvwasi.wasiSnapshotPreview1.path_symlink()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-path_symlinkold_path-string-fd-fd-new_path-string---result-errno)
 - [`wvwasi.wasiSnapshotPreview1.path_unlink_file()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-path_unlink_filefd-fd-path-string---result-errno)
+- [`wvwasi.wasiSnapshotPreview1.poll_oneoff()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-37)
+- [`wvwasi.wasiSnapshotPreview1.proc_exit()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-38)
+- [`wvwasi.wasiSnapshotPreview1.proc_raise()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-39)
+- [`wvwasi.wasiSnapshotPreview1.sched_yield()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-40)
+- [`wvwasi.wasiSnapshotPreview1.random_get()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-41)
+- [`wvwasi.wasiSnapshotPreview1.sock_accept()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-42)
+- [`wvwasi.wasiSnapshotPreview1.sock_recv()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-43)
+- [`wvwasi.wasiSnapshotPreview1.sock_send()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-44)
+- [`wvwasi.wasiSnapshotPreview1.sock_shutdown()`](https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#params-45)
 
 [WASI]: https://github.com/WebAssembly/WASI
 [preview 1]: https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md

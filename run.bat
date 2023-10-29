@@ -1,1 +1,1 @@
-cargo run --example hello_world --target x86_64-pc-windows-msvc
+cargo run --example hello_world --target x86_64-pc-windows-msvc -- arg1=1 arg2=2

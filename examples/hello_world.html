@@ -51,7 +51,7 @@
           1 << 27 | // poll_fd_readwrite
           1 << 28 | // sock_shutdown
           1 << 29 // sock_accept TODO use bigInt
-      let sharedBuffer, sharedBufferEnd = 0, rootFd, testTxtFd, testFd
+      let sharedBuffer, sharedBufferEnd = 0, argc, argvBufSize, environCount, environBufSize, socketFd, rootFd, testTxtFd, testFd
 
       // align offset
       function align(offset, align) {
@@ -72,7 +72,7 @@
       // init
       // sharedBuffer: [] grammar: [[ptr, len], ...]
       try{
-        const [[errorCode, index, fd], buffer] = await Promise.all([
+        const [[errorCode, index, fd, socket], buffer] = await Promise.all([
           fetch(`${origin}/wasi_snapshot_preview1/init`).then(x => x.json()),
           new Promise(resolve => {
             const sharedBufferReceivedHandler = e => {
@@ -84,8 +84,199 @@
         ])
         wvwasiIndex = index
         rootFd = fd
+        socketFd = socket
         sharedBuffer = buffer 
-        console.log('init:', errorCode, wvwasiIndex, rootFd, sharedBuffer)
+        console.log('init:', {errorCode, wvwasiIndex, rootFd, socketFd, sharedBuffer})
+      } catch(e) { console.error(e) }
+
+      // random_get
+      // sharedBuffer: [
+      //   ...
+      //   [bufPtr, bufLen],
+      // ]
+      try {
+        const bufPtr = align(sharedBufferEnd, 4)
+        const bufLen = 1024
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/random_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([bufPtr, bufLen])
+          }
+        ).then(x => x.json())
+        random = new Uint32Array(sharedBuffer, bufPtr, 4)[0];
+        console.log("random_get:", {errorCode, bufPtr, bufLen, random})
+        sharedBufferEnd = bufPtr + bufLen*1
+      } catch(e) { console.error(e) }
+
+      // args_sizes_get
+      // sharedBuffer: [
+      //   ...
+      //   [argcPtr, 4],
+      //   [argBufSizePtr, 4],
+      // ]
+      try {
+        const argcPtr = align(sharedBufferEnd, 4)
+        const argvBufSizePtr = argcPtr + 4
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/args_sizes_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([argcPtr, argvBufSizePtr])
+          }
+        ).then(x => x.json())
+        argc = new Uint32Array(sharedBuffer, argcPtr, 4)[0];
+        argvBufSize = new Uint32Array(sharedBuffer, argvBufSizePtr, 4)[0]
+        console.log("args_sizes_get:", {errorCode, argcPtr, argvBufSizePtr, argc, argvBufSize})
+        sharedBufferEnd = argvBufSizePtr + 4
+      } catch(e) { console.error(e) }
+
+      // args_get
+      // sharedBuffer: [
+      //   ...
+      //   [argvPtr, Math.max(argc*4, 4)],
+      //   [argvBufPtr, Math.max(argvBufSize, 4)],
+      // ]
+      try {
+        const argvPtr = align(sharedBufferEnd, 4)
+        const argvBufPtr = argvPtr + Math.max(argc*4, 4)
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/args_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([argvPtr, argvBufPtr])
+          }
+        ).then(x => x.json())
+        const argv = new Uint32Array(sharedBuffer, argvPtr, argc);
+        const argvBuf = new TextDecoder().decode(new Uint8Array(sharedBuffer, argvBufPtr, argvBufSize))
+        console.log("args_get:", {errorCode, argvPtr, argvBufPtr, argv, argvBuf})
+
+        sharedBufferEnd = argvBufPtr + Math.max(argvBufSize, 4)
+      } catch(e) { console.error(e) }
+
+      // environ_sizes_get
+      // sharedBuffer: [
+      //   ...
+      //   [environCountPtr, 4],
+      //   [environBufSizePtr, 4],
+      // ]
+      try {
+        const environCountPtr = align(sharedBufferEnd, 4)
+        const environBufSizePtr = environCountPtr + 4
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/environ_sizes_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([environCountPtr, environBufSizePtr])
+          }
+        ).then(x => x.json())
+        environCount = new Uint32Array(sharedBuffer, environCountPtr, 4)[0];
+        environBufSize = new Uint32Array(sharedBuffer, environBufSizePtr, 4)[0]
+        console.log("environ_sizes_get:", {errorCode, environCountPtr, environBufSizePtr, environCount, environBufSize})
+        sharedBufferEnd = environBufSize + 4
+      } catch(e) { console.error(e) }
+
+      // environ_get
+      // sharedBuffer: [
+      //   ...
+      //   [environPtr, Math.max(environCount*4, 4)],
+      //   [environBufPtr, Math.max(environBufSize, 4)],
+      // ]
+      try {
+        const environPtr = align(sharedBufferEnd, 4)
+        const environBufPtr = environPtr + Math.max(environCount*4, 4)
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/environ_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([environPtr, environBufPtr])
+          }
+        ).then(x => x.json())
+        const environ = new Uint32Array(sharedBuffer, environPtr, environCount);
+        const environBuf = new TextDecoder().decode(new Uint8Array(sharedBuffer, environBufPtr, environBufSize))
+        console.log("environ_get:", {errorCode, environPtr, environBufPtr, environ, environBuf})
+
+        sharedBufferEnd = environBufPtr + Math.max(environBufSize, 4)
+      } catch(e) { console.error(e) }
+
+      // clock_res_get
+      // sharedBuffer: [
+      //   ...
+      //   [resolutionPtr, 8],
+      // ]
+      try {
+        const clockid = 0 << 0 // realtime
+        const resolutionPtr = align(sharedBufferEnd, 8)
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/clock_res_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([clockid, resolutionPtr])
+          }
+        ).then(x => x.json())
+        const resolution = Number(new BigInt64Array(sharedBuffer, resolutionPtr, 1)[0]);
+        console.log("clock_res_get:", {errorCode, clockid, resolution})
+        sharedBufferEnd = resolutionPtr + 8
+      } catch(e) { console.error(e) }
+
+      // clock_time_get
+      // sharedBuffer: [
+      //   ...
+      //   [timePtr, 4],
+      // ]
+      try {
+        const id = 0 << 0 // realtime
+        const precision = 0
+        const timePtr = align(sharedBufferEnd, 8)
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/clock_time_get`,
+          {
+            method: 'POST',
+            body: JSON.stringify([id, precision, timePtr])
+          }
+        ).then(x => x.json())
+        const time = new BigInt64Array(sharedBuffer, timePtr, 1)[0];
+        console.log("clock_time_get:", {errorCode, id, precision, timePtr, time, timeDate: new Date(Number(time/1000000n))})
+        sharedBufferEnd = timePtr + 8
+      } catch(e) { console.error(e) }
+
+      // poll_oneoff
+      // sharedBuffer: [
+      //   ...
+      //   [inPtr, 48*8],
+      //   [neventsPtr, 8],
+      //   [outPtr, 32*8],
+      //
+      try {
+        const inPtr = align(sharedBufferEnd, 4)
+        const in_ = new DataView(sharedBuffer, inPtr, 48*8) // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#record-members-16
+        const inUserData = 12345678n
+        in_.setBigUint64(0, inUserData, true) // in.userdata 8
+        const inUTag = 0n // clock https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#variant-layout
+        in_.setBigUint64(8, inUTag, true) // in.u.tag
+        const inUId = 0n // realtime https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#clockid
+        in_.setBigUint64(16, inUId, true) // in.u.id
+        const inUTimeout = 5000000000n // 5s 
+        in_.setBigUint64(24, inUTimeout, true) // in.u.timeout
+        const inUPrecision = 0n
+        in_.setBigUint64(32, inUPrecision, true) // in.u.precision
+        const inUFlags = 0n
+        in_.setBigUint64(40, inUFlags, true) // in.u.flags
+        const neventsPtr = inPtr + 48*8
+        const outPtr = neventsPtr + 8
+        const nsubscriptions = 1
+        const beforeTime = new Date()
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/poll_oneoff`,
+          {
+            method: 'POST',
+            body: JSON.stringify([inPtr, outPtr, nsubscriptions, neventsPtr])
+          }
+        ).then(x => x.json())
+        const afterTime = new Date()
+        const nevents = new BigInt64Array(sharedBuffer, neventsPtr, 1)[0];
+        console.log("poll_oneoff:", {errorCode, inPtr, outPtr, nsubscriptions, neventsPtr, nevents, beforeTime, afterTime})
+        sharedBufferEnd = outPtr + 32*8 // https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#record-members-12
       } catch(e) { console.error(e) }
 
       // fd_prestat_get
@@ -326,7 +517,7 @@
       // sharedBuffer: [
       //   ...
       //   [iovsPtr, iovsLen*8],
-      //   [nwittenPtr, 4],
+      //   [nwrittenPtr, 4],
       //   [iovsBufPtr, written.length],
       // ]
       try {
@@ -911,6 +1102,119 @@
         sharedBufferEnd = buf + bufused 
       } catch(e) { console.error(e) }
 
+      // sock_accept telnet 127.0.0.1 9999 | echo hi i am telnet
+      // sharedBuffer: [
+      //   ...
+      //   [resultFdPtr, 4],
+      // ]
+      try {
+        const fd = socketFd
+        const flags = 1 << 2 // nonblock
+        const resultFdPtr = align(sharedBufferEnd, 4)
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/sock_accept`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              fd,
+              flags,
+              resultFdPtr,
+            ])
+          }
+        ).then(x => x.json())
+        const resultFd = new Int32Array(sharedBuffer, resultFdPtr, 1)[0];
+        socketFd = resultFd
+        console.log("sock_accept:", {errorCode, fd, flags, resultFdPtr, resultFd})
+        sharedBufferEnd = resultFdPtr + 4
+      } catch(e) { console.error(e) }
+
+      // sock_recv
+      // sharedBuffer: [
+      //   ...
+      //   [riDataPtr, riDataLen*8],
+      //   [sizePtr, 4],
+      //   [roflagsPtr, 4],
+      //   [iovsBufPtr, iovsBufLen],
+      // ]
+      try {
+        const fd = socketFd
+        const riDataPtr = align(sharedBufferEnd, 4) // align to 4
+        const riDataLen = 1
+        const riFlags = 0 << 0
+        const sizePtr = align(riDataPtr + riDataLen*8, 4)
+        const roflagsPtr = sizePtr + 4
+        const iovsBufPtr = roflagsPtr + 4
+        const iovsBufLen = 128
+        const iovs = new DataView(sharedBuffer, riDataPtr, riDataLen*8)
+        iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
+        iovs.setInt32(4, iovsBufLen, true) // iovs.buf_len
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/sock_recv`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, riDataPtr, riDataLen, riFlags, sizePtr, roflagsPtr])
+          }
+        ).then(x => x.json())
+        const size = new Int32Array(sharedBuffer, sizePtr, 1)[0];
+        const roflags = new Int32Array(sharedBuffer, roflagsPtr, 1)[0];
+        console.log("sock_recv:", {errorCode, riDataPtr, riDataLen, riFlags, sizePtr, roflagsPtr, size, roflags})
+        sharedBufferEnd = iovsBufPtr + iovsBufLen
+      } catch(e) { console.error(e) }
+
+      // sock_send
+      // sharedBuffer: [
+      //   ...
+      //   [siDataPtr, siDataLen*8],
+      //   [sizePtr, 4],
+      //   [iovsBufPtr, iovsBufLen],
+      // ]
+      try {
+        const fd = socketFd
+        const siDataPtr = align(sharedBufferEnd, 4) // align to 4
+        const siDataLen = 1
+        const sizePtr = align(siDataPtr + siDataLen*8, 4)
+        const iovsBufPtr = sizePtr + 4
+        const send = new TextEncoder().encode("I'm wvwasi sock_send!")
+        const iovsBufLen = send.length
+        const iovs = new DataView(sharedBuffer, siDataPtr, siDataLen*8)
+        iovs.setInt32(0, iovsBufPtr, true) // iovs.buf_ptr
+        iovs.setInt32(4, iovsBufLen, true) // iovs.buf_len
+        const pathArray = new Uint8Array(sharedBuffer, iovsBufPtr, iovsBufLen)
+        for(let i = 0, l = iovsBufLen; i < l; i++) {
+          pathArray[i] = send[i]
+        }
+        const siFlags = 0 << 0
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/sock_send`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, siDataPtr, siDataLen, siFlags, sizePtr])
+          }
+        ).then(x => x.json())
+        const size = new Int32Array(sharedBuffer, sizePtr, 1)[0];
+        console.log("si_flags:", {errorCode, siDataPtr, siDataLen, siFlags, sizePtr, size})
+        sharedBufferEnd = iovsBufPtr + iovsBufLen
+      } catch(e) { console.error(e) }
+
+      // sock_shutdown
+      // sharedBuffer: [
+      //   ...
+      // ]
+      try {
+        const fd = socketFd
+        const how = 
+          1 << 0 | // read
+          1 << 1 // write
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/sock_shutdown`,
+          {
+            method: 'POST',
+            body: JSON.stringify([fd, how])
+          }
+        ).then(x => x.json())
+        console.log("sock_shutdown:", {errorCode, fd, how})
+      } catch(e) { console.error(e) }
+
       // path_unlink_file
       // sharedBuffer: [
       //   ...
@@ -936,6 +1240,49 @@
         ).then(x => x.json())
         console.log("path_unlink_file:", {errorCode, fd, pathPtr, pathLen})
         sharedBufferEnd = pathPtr + pathLen
+      } catch(e) { console.error(e) }
+
+      // sched_yield
+      try {
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/sched_yield`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+            ])
+          }
+        ).then(x => x.json())
+        console.log("sched_yield:", {errorCode})
+      } catch(e) { console.error(e) }
+
+      // proc_raise
+      try {
+        const sig = 0
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/proc_raise`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              sig,
+            ])
+          }
+        ).then(x => x.json())
+        console.log("proc_raise:", {errorCode, sig})
+      } catch(e) { console.error(e) }
+
+      // proc_exit
+      try {
+        const rval = 0
+        const [errorCode] = await fetch(
+          `${origin}/${wvwasiIndex}/wasi_snapshot_preview1/proc_exit`,
+          {
+            method: 'POST',
+            body: JSON.stringify([
+              rval,
+            ])
+          }
+        ).then(x => x.json())
+        console.log("proc_exit:", {errorCode, rval })
       } catch(e) { console.error(e) }
     })
   </script>

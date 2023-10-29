@@ -37,6 +37,7 @@ fn handle_wvwasi_protocol<'a>(
             let wasi_index = wasis.len();
             let shared_buffer = wasi.shared_buffer.clone();
             let root_fd = wasi.root_fd;
+            let socket_fd = wasi.socket_fd;
             wasis.push(wasi);
             let errno = Into::<u16>::into(Errno::Success);
 
@@ -54,12 +55,18 @@ fn handle_wvwasi_protocol<'a>(
                 ),
               )
             };
-            Ok(format!(r#"[{},{},{}]"#, errno, wasi_index, root_fd).as_bytes().to_owned())
+            Ok(format!(r#"[{},{},{},{}]"#, errno, wasi_index, root_fd, socket_fd).as_bytes().to_owned())
           },
           Err(err) => { Err(err) }
         }
       } else if let Some(wasi) = wasis.get_mut(wasi_index) {
         match path {
+          "/args_get" => { wasi.args_get(request_body) },
+          "/args_sizes_get" => { wasi.args_sizes_get(request_body) },
+          "/environ_get" => { wasi.environ_get(request_body) },
+          "/environ_sizes_get" => { wasi.environ_sizes_get(request_body) },
+          "/clock_res_get" => { wasi.clock_res_get(request_body) },
+          "/clock_time_get" => { wasi.clock_time_get(request_body) },
           "/fd_advise" => { wasi.fd_advise(request_body) },
           "/fd_allocate" => { wasi.fd_allocate(request_body) },
           "/fd_close" => { wasi.fd_close(request_body) },
@@ -91,7 +98,16 @@ fn handle_wvwasi_protocol<'a>(
           "/path_rename" => { wasi.path_rename(request_body) },
           "/path_symlink" => { wasi.path_symlink(request_body) },
           "/path_unlink_file" => { wasi.path_unlink_file(request_body) },
-          _ => { 
+          "/poll_oneoff" => { wasi.poll_oneoff(request_body) },
+          "/proc_exit" => { wasi.proc_exit(request_body) },
+          "/proc_raise" => { wasi.proc_raise(request_body) },
+          "/sched_yield" => { wasi.sched_yield(request_body) },
+          "/random_get" => { wasi.random_get(request_body) },
+          "/sock_accept" => { wasi.sock_accept(request_body) },
+          "/sock_recv" => { wasi.sock_recv(request_body) },
+          "/sock_send" => { wasi.sock_send(request_body) },
+          "/sock_shutdown" => { wasi.sock_shutdown(request_body) },
+          _ => {
             Ok("".as_bytes().to_owned())
           }
         }
